@@ -19,23 +19,13 @@ def find_accuracy(
 ) -> Tuple[str, str, str]:
     """
     Computes two-class TPR, multi-class TPR, and FPR given a confidence threshold.
-
-    Args:
-        model_predictions: Softmax prediction probabilities (N, num_classes).
-        conf_thresh: Confidence threshold for open-world classification.
-        actual_labels: One-hot encoded ground truth labels (N, num_classes).
-        num_mon_sites: Number of monitored websites.
-        num_mon_inst_test: Number of test instances per monitored website.
-        num_unmon_sites_test: Number of unmonitored test instances.
-        num_unmon_sites: Total number of unmonitored sites (train + test).
-
-    Returns:
-        two_class_tpr: Percentage of monitored instances classified as monitored.
-        multi_class_tpr: Percentage of monitored instances correctly classified.
-        fpr: Percentage of unmonitored instances falsely classified as monitored.
     """
+    n_samples = min(len(model_predictions), len(actual_labels))
+    model_predictions = model_predictions[:n_samples]
+    actual_labels = actual_labels[:n_samples]
+
     true_classes = np.argmax(actual_labels, axis=1)
-    thresh_model_labels = np.zeros(len(model_predictions), dtype=int)
+    thresh_model_labels = np.zeros(n_samples, dtype=int)
 
     for inst_num, softmax in enumerate(model_predictions):
         predicted_class = int(np.argmax(softmax))
@@ -58,17 +48,22 @@ def find_accuracy(
             if thresh_model_labels[inst_num] == inst_label:
                 multi_class_true_pos += 1
 
-    total_mon_test = num_mon_sites * num_mon_inst_test
+    actual_mon_test = int(np.sum(true_classes < num_mon_sites))
+    total_mon_test = actual_mon_test if actual_mon_test > 0 else (num_mon_sites * num_mon_inst_test)
+
     two_class_tpr_val = (two_class_true_pos / total_mon_test * 100) if total_mon_test > 0 else 0.0
     multi_class_tpr_val = (multi_class_true_pos / total_mon_test * 100) if total_mon_test > 0 else 0.0
 
     two_class_tpr = f"{two_class_tpr_val:.2f}%"
     multi_class_tpr = f"{multi_class_tpr_val:.2f}%"
 
-    if num_unmon_sites == 0 or num_unmon_sites_test == 0:
+    actual_unmon_test = int(np.sum(true_classes == num_mon_sites))
+    total_unmon_test = actual_unmon_test if actual_unmon_test > 0 else num_unmon_sites_test
+
+    if num_unmon_sites == 0 or total_unmon_test == 0:
         fpr = "0.00%"
     else:
-        fpr_val = false_pos / num_unmon_sites_test * 100
+        fpr_val = false_pos / total_unmon_test * 100
         fpr = f"{fpr_val:.2f}%"
 
     return two_class_tpr, multi_class_tpr, fpr
