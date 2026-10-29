@@ -1,0 +1,20 @@
+# Core scientific and ML libraries
+numpy>=1.19.0
+h5py>=2.10.0
+tqdm>=4.60.0
+scikit-learn>=0.24.0
+pyyaml>=5.4.1
+
+# Deep Learning framework (supports modern tf.keras and legacy layers)
+tensorflow>=2.4.0
+
+# Web API framework & serving
+fastapi>=0.95.0
+uvicorn[standard]>=0.21.0
+pydantic>=1.10.0
+
+# Visualization & EDA
+matplotlib>=3.3.0
+
+# Testing
+pytest>=7.0.0

@@ -1,0 +1,15 @@
+.git
+.gitignore
+.venv
+venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.ipynb_checkpoints
+data/raw/
+data/processed/*.h5
+artifacts/checkpoints/*.h5
+artifacts/predictions/*.npy
+.vscode/
+.idea/
