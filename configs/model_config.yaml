@@ -1,0 +1,27 @@
+# ==============================================================================
+# Model Architecture Configuration
+# ==============================================================================
+
+# Model choice: "var-cnn" or "df"
+model_name: "var-cnn"
+
+# Input sequence length
+seq_length: 5000
+
+# Mixture of sub-models for Var-CNN ensemble
+# Options in sub-lists: "dir", "time", "metadata"
+mixture:
+  - ["dir", "metadata"]
+  - ["time", "metadata"]
+
+# Architecture Flags
+dir_dilations: true
+time_dilations: true
+inter_time: true
+scale_metadata: true
+
+# ResNet specifications
+resnet_blocks: [2, 2, 2, 2]
+initial_filters: 64
+dense_units: 1024
+dropout_rate: 0.5

@@ -1,0 +1,31 @@
+# ==============================================================================
+# Open-World Configuration (Thế giới mở)
+# ==============================================================================
+# Giả định: Người dùng có thể truy cập bất kỳ trang web nào trên Internet.
+# Kẻ tấn công chỉ quan tâm đến num_mon_sites trang mục tiêu, và phải phân biệt
+# được khi nào người dùng vào trang unmonitored (không nằm trong danh sách theo dõi).
+
+# Directories
+data_dir: "data/processed/"
+raw_data_dir: "data/raw/"
+artifacts_dir: "artifacts/"
+predictions_dir: "artifacts/predictions/open_world/"
+checkpoint_dir: "artifacts/checkpoints/open_world/"
+
+# World Size Parameters
+num_mon_sites: 100               # 100 trang web mục tiêu cần theo dõi
+num_mon_inst_train: 90           # 90 lượt truy cập/trang để train
+num_mon_inst_test: 10            # 10 lượt truy cập/trang để test
+
+# Trong Open-World, có thêm hàng ngàn trang unmonitored
+num_unmon_sites_train: 9000      # 9000 vết truy cập unmonitored để train
+num_unmon_sites_test: 1000       # 1000 vết truy cập unmonitored để test
+
+# Training Hyperparameters
+batch_size: 50
+learning_rate: 0.001
+var_cnn_max_epochs: 150
+var_cnn_base_patience: 5
+df_epochs: 30
+validation_split: 0.05
+random_seed: 42

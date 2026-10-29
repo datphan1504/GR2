@@ -1,0 +1,331 @@
+"""Data preprocessing pipelines for network traffic traces.
+
+Transforms raw packet traces into structured sequences (direction, inter-arrival time)
+and summary metadata, saving final sets into compressed HDF5 files.
+"""
+
+import os
+import random
+import time
+from typing import Tuple, Dict, Any, List
+
+import h5py
+import numpy as np
+from tqdm import tqdm
+from sklearn.preprocessing import StandardScaler
+
+try:
+    from tensorflow.keras.utils import to_categorical
+except ImportError:
+    try:
+        from keras.utils.np_utils import to_categorical
+    except ImportError:
+        def to_categorical(y, num_classes=None):
+            y = np.array(y, dtype='int')
+            input_shape = y.shape
+            if num_classes is None:
+                num_classes = np.max(y) + 1
+            n = y.shape[0]
+            categorical = np.zeros((n, num_classes), dtype='float32')
+            categorical[np.arange(n), y] = 1
+            return categorical
+
+from src.utils.helpers import get_logger, ensure_dir
+
+logger = get_logger("DataPreprocessing")
+
+
+def process_trace(trace_file_path: str, seq_length: int = 5000) -> Tuple[np.ndarray, np.ndarray, np.ndarray, int]:
+    """
+    Extracts direction sequence, timestamp sequence, metadata features, and label
+    from a Wang-formatted traffic trace.
+
+    Args:
+        trace_file_path: Path to the raw trace file.
+        seq_length: Maximum sequence length to truncate or pad.
+
+    Returns:
+        dir_seq: Array of packet directions (+1: outgoing, -1: incoming).
+        time_seq: Array of packet timestamps.
+        metadata: 7-element array with traffic summary statistics.
+        label: Site label integer (0 for unmonitored, 1..N for monitored).
+    """
+    with open(trace_file_path, 'r', encoding='utf-8', errors='ignore') as f:
+        lines = [line.strip() for line in f if line.strip()]
+
+    dir_seq = np.zeros(seq_length, dtype=np.int8)
+    time_seq = np.zeros(seq_length, dtype=np.float32)
+
+    base_name = os.path.basename(trace_file_path)
+    label = 0 if '-' not in base_name else int(base_name.split('-')[0]) + 1
+
+    if not lines:
+        metadata = np.zeros(7, dtype=np.float32)
+        return dir_seq, time_seq, metadata, label
+
+    total_time = float(lines[-1].split('\t')[0])
+    total_incoming = 0
+    total_outgoing = 0
+
+    for packet_num, line in enumerate(lines):
+        parts = line.split('\t')
+        if len(parts) < 2:
+            continue
+        curr_time = float(parts[0])
+        curr_dir = int(np.sign(float(parts[1])))
+
+        if packet_num < seq_length:
+            dir_seq[packet_num] = curr_dir
+            time_seq[packet_num] = curr_time
+
+        if curr_dir > 0:
+            total_outgoing += 1
+        elif curr_dir < 0:
+            total_incoming += 1
+
+    total_packets = total_incoming + total_outgoing
+    if total_packets == 0:
+        metadata = np.zeros(7, dtype=np.float32)
+    else:
+        metadata = np.array([
+            total_packets,
+            total_incoming,
+            total_outgoing,
+            total_incoming / total_packets,
+            total_outgoing / total_packets,
+            total_time,
+            total_time / total_packets
+        ], dtype=np.float32)
+
+    return dir_seq, time_seq, metadata, label
+
+
+def convert_wang_to_npz(config: Dict[str, Any], raw_batch_dir: str = None) -> None:
+    """
+    Processes all Wang-format traces from raw directory and compiles them
+    into all_closed_world.npz and all_open_world.npz.
+    """
+    data_dir = ensure_dir(config.get("data_dir", "data/processed/"))
+    raw_data_dir = config.get("raw_data_dir", "data/raw/")
+    if raw_batch_dir is None:
+        raw_batch_dir = os.path.join(raw_data_dir, "batch_wang")
+        if not os.path.exists(raw_batch_dir):
+            raw_batch_dir = os.path.join(data_dir, "batch_wang")
+
+    if not os.path.exists(raw_batch_dir):
+        logger.warning(f"Raw trace directory not found at {raw_batch_dir}. Skipping Wang-to-NPZ conversion.")
+        return
+
+    num_mon_sites = config['num_mon_sites']
+    num_mon_inst_test = config['num_mon_inst_test']
+    num_mon_inst_train = config['num_mon_inst_train']
+    num_mon_inst = num_mon_inst_test + num_mon_inst_train
+    num_unmon_sites_test = config['num_unmon_sites_test']
+    num_unmon_sites_train = config['num_unmon_sites_train']
+    num_unmon_sites = num_unmon_sites_test + num_unmon_sites_train
+    seq_length = config.get("seq_length", 5000)
+
+    trace_files = [os.path.join(raw_batch_dir, f) for f in os.listdir(raw_batch_dir)]
+    logger.info(f"Total raw traces found: {len(trace_files)}")
+
+    dir_seq_mon = []
+    time_seq_mon = []
+    metadata_mon = []
+    labels_mon = []
+
+    dir_seq_unmon = []
+    time_seq_unmon = []
+    metadata_unmon = []
+    labels_unmon = []
+
+    for trace_path in tqdm(trace_files, desc="Parsing raw traces"):
+        dir_seq, time_seq, metadata, label = process_trace(trace_path, seq_length=seq_length)
+        if label == 0:
+            if len(labels_unmon) < num_unmon_sites:
+                dir_seq_unmon.append(dir_seq)
+                time_seq_unmon.append(time_seq)
+                metadata_unmon.append(metadata)
+                labels_unmon.append(label)
+        else:
+            if len(labels_mon) < (num_mon_sites * num_mon_inst):
+                dir_seq_mon.append(dir_seq)
+                time_seq_mon.append(time_seq)
+                metadata_mon.append(metadata)
+                labels_mon.append(label)
+
+    closed_path = os.path.join(data_dir, "all_closed_world.npz")
+    np.savez_compressed(
+        closed_path,
+        dir_seq=np.array(dir_seq_mon, dtype=np.int8),
+        time_seq=np.array(time_seq_mon, dtype=np.float32),
+        metadata=np.array(metadata_mon, dtype=np.float32),
+        labels=np.array(labels_mon)
+    )
+    logger.info(f"Saved monitored traces to {closed_path}")
+
+    open_path = os.path.join(data_dir, "all_open_world.npz")
+    np.savez_compressed(
+        open_path,
+        dir_seq=np.array(dir_seq_unmon, dtype=np.int8),
+        time_seq=np.array(time_seq_unmon, dtype=np.float32),
+        metadata=np.array(metadata_unmon, dtype=np.float32),
+        labels=np.array(labels_unmon)
+    )
+    logger.info(f"Saved unmonitored traces to {open_path}")
+
+
+def preprocess_pipeline(config: Dict[str, Any]) -> str:
+    """
+    Main preprocessing pipeline that:
+    1. Loads compiled .npz datasets.
+    2. Performs train/test splitting.
+    3. Calculates inter-arrival timings if configured.
+    4. Scales metadata with StandardScaler.
+    5. Saves training, validation, and test sets into HDF5 format.
+
+    Returns:
+        output_h5_path: Path to the generated .h5 file.
+    """
+    num_mon_sites = config['num_mon_sites']
+    num_mon_inst_test = config['num_mon_inst_test']
+    num_mon_inst_train = config['num_mon_inst_train']
+    num_mon_inst = num_mon_inst_test + num_mon_inst_train
+    num_unmon_sites_test = config['num_unmon_sites_test']
+    num_unmon_sites_train = config['num_unmon_sites_train']
+    num_unmon_sites = num_unmon_sites_test + num_unmon_sites_train
+
+    inter_time = config.get('inter_time', True)
+    scale_metadata = config.get('scale_metadata', True)
+    data_dir = ensure_dir(config.get('data_dir', 'data/processed/'))
+
+    mon_data_loc = os.path.join(data_dir, 'all_closed_world.npz')
+    unmon_data_loc = os.path.join(data_dir, 'all_open_world.npz')
+
+    if not os.path.exists(mon_data_loc) or not os.path.exists(unmon_data_loc):
+        logger.info("NPZ archives not found. Attempting conversion from raw files...")
+        convert_wang_to_npz(config)
+
+    output_h5_filename = f"{num_mon_sites}_{num_mon_inst}_{num_unmon_sites_train}_{num_unmon_sites_test}.h5"
+    output_h5_path = os.path.join(data_dir, output_h5_filename)
+
+    if not os.path.exists(mon_data_loc) or not os.path.exists(unmon_data_loc):
+        logger.warning("Closed/Open world NPZ data files are not present. Preprocessing skipped.")
+        return output_h5_path
+
+    logger.info(f"Starting data preprocessing for {output_h5_filename}...")
+    start_time = time.time()
+
+    mon_dataset = np.load(mon_data_loc)
+    mon_dir_seq = mon_dataset['dir_seq']
+    mon_time_seq = mon_dataset['time_seq']
+    mon_metadata = mon_dataset['metadata']
+    mon_labels = mon_dataset['labels']
+
+    train_seq_and_labels = []
+    test_seq_and_labels = []
+
+    mon_site_data: Dict[Any, List] = {}
+    mon_site_labels: Dict[Any, int] = {}
+
+    for dir_seq, time_seq, metadata, site_name in zip(mon_dir_seq, mon_time_seq, mon_metadata, mon_labels):
+        if site_name not in mon_site_data:
+            if len(mon_site_data) >= num_mon_sites:
+                continue
+            mon_site_data[site_name] = []
+            mon_site_labels[site_name] = len(mon_site_labels)
+
+        mon_site_data[site_name].append([dir_seq, time_seq, metadata, mon_site_labels[site_name]])
+
+    for instances in mon_site_data.values():
+        random.shuffle(instances)
+        for inst_num, item in enumerate(instances):
+            if inst_num < num_mon_inst_train:
+                train_seq_and_labels.append(item)
+            elif inst_num < num_mon_inst:
+                test_seq_and_labels.append(item)
+            else:
+                break
+
+    del mon_dataset, mon_dir_seq, mon_time_seq, mon_metadata, mon_labels, mon_site_data, mon_site_labels
+
+    if os.path.exists(unmon_data_loc) and num_unmon_sites > 0:
+        unmon_dataset = np.load(unmon_data_loc)
+        unmon_dir_seq = unmon_dataset['dir_seq']
+        unmon_time_seq = unmon_dataset['time_seq']
+        unmon_metadata = unmon_dataset['metadata']
+
+        unmon_site_data = [
+            [d, t, m, num_mon_sites]
+            for d, t, m in zip(unmon_dir_seq, unmon_time_seq, unmon_metadata)
+        ]
+        random.shuffle(unmon_site_data)
+
+        for inst_num, item in enumerate(unmon_site_data):
+            if inst_num < num_unmon_sites_train:
+                train_seq_and_labels.append(item)
+            elif inst_num < num_unmon_sites:
+                test_seq_and_labels.append(item)
+            else:
+                break
+
+        del unmon_dataset, unmon_dir_seq, unmon_time_seq, unmon_metadata, unmon_site_data
+
+    random.shuffle(train_seq_and_labels)
+    random.shuffle(test_seq_and_labels)
+
+    train_dir = np.array([x[0] for x in train_seq_and_labels])
+    train_time = np.array([x[1] for x in train_seq_and_labels])
+    train_metadata = np.array([x[2] for x in train_seq_and_labels])
+    train_labels = [x[3] for x in train_seq_and_labels]
+
+    test_dir = np.array([x[0] for x in test_seq_and_labels])
+    test_time = np.array([x[1] for x in test_seq_and_labels])
+    test_metadata = np.array([x[2] for x in test_seq_and_labels])
+    test_labels = [x[3] for x in test_seq_and_labels]
+
+    if inter_time:
+        if len(train_time) > 0:
+            inter_train = np.zeros_like(train_time)
+            inter_train[:, 1:] = train_time[:, 1:] - train_time[:, :-1]
+            train_time = inter_train
+
+        if len(test_time) > 0:
+            inter_test = np.zeros_like(test_time)
+            inter_test[:, 1:] = test_time[:, 1:] - test_time[:, :-1]
+            test_time = inter_test
+
+    if len(train_dir) > 0:
+        train_dir = np.reshape(train_dir, (train_dir.shape[0], train_dir.shape[1], 1))
+        train_time = np.reshape(train_time, (train_time.shape[0], train_time.shape[1], 1))
+    if len(test_dir) > 0:
+        test_dir = np.reshape(test_dir, (test_dir.shape[0], test_dir.shape[1], 1))
+        test_time = np.reshape(test_time, (test_time.shape[0], test_time.shape[1], 1))
+
+    if scale_metadata and len(train_metadata) > 0 and len(test_metadata) > 0:
+        scaler = StandardScaler()
+        train_metadata = scaler.fit_transform(train_metadata)
+        test_metadata = scaler.transform(test_metadata)
+
+    num_classes = num_mon_sites if num_unmon_sites == 0 else num_mon_sites + 1
+    train_labels = to_categorical(train_labels, num_classes=num_classes)
+    test_labels = to_categorical(test_labels, num_classes=num_classes)
+
+    val_split = config.get("validation_split", 0.05)
+    split_idx = int((1.0 - val_split) * len(train_dir))
+
+    with h5py.File(output_h5_path, 'w') as f:
+        f.create_group('training_data')
+        f.create_group('validation_data')
+        f.create_group('test_data')
+
+        for ds_name, arr in [('dir_seq', train_dir), ('time_seq', train_time),
+                             ('metadata', train_metadata), ('labels', train_labels)]:
+            f.create_dataset(f'training_data/{ds_name}', data=arr[:split_idx])
+            f.create_dataset(f'validation_data/{ds_name}', data=arr[split_idx:])
+
+        for ds_name, arr in [('dir_seq', test_dir), ('time_seq', test_time),
+                             ('metadata', test_metadata), ('labels', test_labels)]:
+            f.create_dataset(f'test_data/{ds_name}', data=arr)
+
+    logger.info(f"Finished saving {output_h5_path} in {time.time() - start_time:.2f} seconds.")
+    return output_h5_path
