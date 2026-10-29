@@ -18,19 +18,17 @@ def get_callbacks(config: Dict[str, Any], sub_model_name: str = "var_cnn") -> Li
     Constructs training callbacks:
     - ReduceLROnPlateau
     - EarlyStopping
-    - ModelCheckpoint
+    - ModelCheckpoint (using .weights.h5 suffix for Keras 3 compatibility)
     """
     base_patience = config.get('var_cnn_base_patience', 5)
     artifacts_dir = ensure_dir(config.get('artifacts_dir', 'artifacts/'))
     checkpoint_dir = ensure_dir(config.get('checkpoint_dir', os.path.join(artifacts_dir, 'checkpoints')))
 
-    checkpoint_file = os.path.join(checkpoint_dir, f"{sub_model_name}_best_weights.h5")
+    checkpoint_file = os.path.join(checkpoint_dir, f"{sub_model_name}_best.weights.h5")
 
-    # In modern tf.keras, monitor is 'val_accuracy', in older keras it is 'val_acc'
-    # We can detect or use standard val_accuracy
     monitor_metric = 'val_accuracy'
     try:
-        import tensorflow as tf
+        import tensorflow as tf  # noqa: F401
     except ImportError:
         monitor_metric = 'val_acc'
 

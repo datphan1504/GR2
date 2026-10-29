@@ -2,10 +2,9 @@
 
 import os
 import threading
-from typing import Dict, Any, Generator, Tuple
+from typing import Dict, Any, Generator
 
 import h5py
-import numpy as np
 
 
 class ThreadSafeIter:
@@ -34,10 +33,33 @@ def thread_safe_generator(f):
     return g
 
 
-@thread_safe_generator
+def get_h5_path(config: Dict[str, Any]) -> str:
+    """Returns the expected HDF5 dataset path for the given configuration."""
+    num_mon_sites = config['num_mon_sites']
+    num_mon_inst_train = config['num_mon_inst_train']
+    num_mon_inst_test = config['num_mon_inst_test']
+    num_mon_inst = num_mon_inst_train + num_mon_inst_test
+    num_unmon_sites_train = config.get('num_unmon_sites_train', 0)
+    num_unmon_sites_test = config.get('num_unmon_sites_test', 0)
+
+    data_dir = config.get('data_dir', 'data/processed/')
+    h5_filename = f"{num_mon_sites}_{num_mon_inst}_{num_unmon_sites_train}_{num_unmon_sites_test}.h5"
+    return os.path.join(data_dir, h5_filename)
+
+
+def get_split_size(config: Dict[str, Any], data_type: str) -> int:
+    """Returns the exact number of samples in a dataset split from the HDF5 file."""
+    h5_path = get_h5_path(config)
+    if not os.path.exists(h5_path):
+        raise FileNotFoundError(f"HDF5 dataset not found: {h5_path}. Run preprocessing first.")
+    with h5py.File(h5_path, 'r') as f:
+        return len(f[f'{data_type}/labels'])
+
+
 def generate(config: Dict[str, Any], data_type: str, mixture_num: int = 0) -> Generator[Any, None, None]:
     """
     Yields batches of data formatted for the specified mixture sub-model.
+    Compatible with both Keras 2 and Keras 3 (TensorFlow 2.16+ on Colab).
 
     Args:
         config: Project configuration dictionary.
@@ -46,16 +68,8 @@ def generate(config: Dict[str, Any], data_type: str, mixture_num: int = 0) -> Ge
 
     Yields:
         Tuple of (inputs_dict, outputs_dict) for training/validation,
-        or inputs_dict for test data.
+        or (inputs_dict,) for test data.
     """
-    num_mon_sites = config['num_mon_sites']
-    num_mon_inst_train = config['num_mon_inst_train']
-    num_mon_inst_test = config['num_mon_inst_test']
-    num_mon_inst = num_mon_inst_train + num_mon_inst_test
-    num_unmon_sites_train = config['num_unmon_sites_train']
-    num_unmon_sites_test = config['num_unmon_sites_test']
-
-    data_dir = config.get('data_dir', 'data/processed/')
     batch_size = config.get('batch_size', 50)
     mixture = config.get('mixture', [["dir", "metadata"]])
 
@@ -64,9 +78,7 @@ def generate(config: Dict[str, Any], data_type: str, mixture_num: int = 0) -> Ge
     use_time = 'time' in sub_comb
     use_metadata = 'metadata' in sub_comb
 
-    h5_filename = f"{num_mon_sites}_{num_mon_inst}_{num_unmon_sites_train}_{num_unmon_sites_test}.h5"
-    h5_path = os.path.join(data_dir, h5_filename)
-
+    h5_path = get_h5_path(config)
     if not os.path.exists(h5_path):
         raise FileNotFoundError(f"HDF5 dataset not found: {h5_path}. Run preprocessing first.")
 
@@ -97,6 +109,6 @@ def generate(config: Dict[str, Any], data_type: str, mixture_num: int = 0) -> Ge
             batch_start += batch_size
 
             if data_type == 'test_data':
-                yield batch_inputs
+                yield (batch_inputs,)
             else:
-                yield (batch_inputs, {'model_output': batch_labels})
+                yield (batch_inputs, batch_labels)

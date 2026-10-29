@@ -54,6 +54,20 @@ def load_file_config(config_path: str) -> Dict[str, Any]:
         raise ValueError(f"Unsupported config file extension: {ext}. Use .yaml, .yml or .json")
 
 
+def _resolve_config_path(path: Optional[str], base_dir: str, default_rel_path: str) -> str:
+    """Resolves a config path relative to current working directory or base_dir."""
+    if path is None:
+        return os.path.join(base_dir, default_rel_path)
+    if os.path.exists(path):
+        return path
+    candidate = os.path.join(base_dir, path)
+    if os.path.exists(candidate):
+        return candidate
+    raise FileNotFoundError(
+        f"Configuration file not found: '{path}' (also checked '{candidate}')"
+    )
+
+
 def load_config(
     train_config_path: Optional[str] = None,
     model_config_path: Optional[str] = None,
@@ -67,22 +81,24 @@ def load_config(
         # Assuming GR2 root
         base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "../.."))
 
-    if train_config_path is None:
-        train_config_path = os.path.join(base_dir, "configs", "train_config.yaml")
-        if not os.path.exists(train_config_path):
-            # Fallback to json if exists
-            train_config_path = os.path.join(base_dir, "configs", "config.json")
-
-    if model_config_path is None:
-        model_config_path = os.path.join(base_dir, "configs", "model_config.yaml")
-
     config: Dict[str, Any] = {}
 
-    if os.path.exists(train_config_path):
-        config.update(load_file_config(train_config_path))
+    # Load base train_config.yaml first as fallback defaults if it exists
+    default_train_cfg = os.path.join(base_dir, "configs", "train_config.yaml")
+    if os.path.exists(default_train_cfg):
+        config.update(load_file_config(default_train_cfg))
 
-    if os.path.exists(model_config_path):
-        config.update(load_file_config(model_config_path))
+    resolved_train_path = _resolve_config_path(
+        train_config_path, base_dir, os.path.join("configs", "train_config.yaml")
+    )
+    if os.path.exists(resolved_train_path):
+        config.update(load_file_config(resolved_train_path))
+
+    resolved_model_path = _resolve_config_path(
+        model_config_path, base_dir, os.path.join("configs", "model_config.yaml")
+    )
+    if os.path.exists(resolved_model_path):
+        config.update(load_file_config(resolved_model_path))
 
     # Normalize relative paths to base_dir
     for path_key in ["data_dir", "raw_data_dir", "artifacts_dir", "predictions_dir", "checkpoint_dir"]:

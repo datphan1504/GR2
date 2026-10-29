@@ -11,9 +11,9 @@ artifacts_dir: "artifacts/"
 predictions_dir: "artifacts/predictions/closed_world/"
 checkpoint_dir: "artifacts/checkpoints/closed_world/"
 
-# World Size Parameters
-num_mon_sites: 100           # Số trang web được theo dõi (ví dụ: 100 trang)
-num_mon_inst_train: 90       # 90 lượt truy cập/trang dùng để train
+# World Size Parameters (Phù hợp với bộ 60 trang web x 90+ mẫu trong traces/csv)
+num_mon_sites: 60            # 60 trang web được theo dõi
+num_mon_inst_train: 80       # 80 lượt truy cập/trang dùng để train
 num_mon_inst_test: 10        # 10 lượt truy cập/trang dùng để test
 
 # Trong Closed-World, KHÔNG CÓ trang unmonitored
